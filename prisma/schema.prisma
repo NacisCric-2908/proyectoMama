@@ -1,0 +1,351 @@
+// Sistema de costeo por órdenes de proyecto — modelo de datos (Fase 1)
+// Dinero y cantidades: Decimal de precisión fija. Nunca Float.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ───────────── Seguridad ─────────────
+
+model Rol {
+  id       String    @id @default(cuid())
+  clave    String    @unique // ADMINISTRADOR, CONTADOR, COORDINADOR, TECNICO, GERENCIA
+  nombre   String
+  permisos Permiso[]
+  usuarios Usuario[]
+}
+
+model Permiso {
+  id    String @id @default(cuid())
+  rolId String
+  clave String
+  rol   Rol    @relation(fields: [rolId], references: [id], onDelete: Cascade)
+
+  @@unique([rolId, clave])
+}
+
+model Usuario {
+  id             String      @id @default(cuid())
+  email          String      @unique
+  nombre         String
+  hashContrasena String
+  rolId          String
+  rol            Rol         @relation(fields: [rolId], references: [id])
+  trabajadorId   String?     @unique
+  trabajador     Trabajador? @relation(fields: [trabajadorId], references: [id])
+  activo         Boolean     @default(true)
+  creadoEn       DateTime    @default(now())
+  modificadoEn   DateTime    @updatedAt
+
+  ordenesResponsable OrdenProyecto[] @relation("Responsable")
+}
+
+model ParametrosGenerales {
+  id                 Int      @id @default(1)
+  nombreEmpresa      String
+  logo               String? // data URL (base64)
+  margenMinimoGlobal Decimal  @default(15) @db.Decimal(9, 4)
+  formatoCodigoOrden String   @default("OP-{AAAA}-{NNNN}")
+  baseCifDefecto     BaseCIF  @default(HORAS_MOD)
+  umbralMermaPct     Decimal  @default(10) @db.Decimal(9, 4)
+  moneda             String   @default("COP")
+  modificadoEn       DateTime @updatedAt
+}
+
+// ───────────── Catálogos ─────────────
+
+model Cliente {
+  id           String          @id @default(cuid())
+  nombre       String
+  nit          String?
+  contacto     String?
+  telefono     String?
+  correo       String?
+  ciudad       String?
+  activo       Boolean         @default(true)
+  creadoEn     DateTime        @default(now())
+  modificadoEn DateTime        @updatedAt
+  eliminadoEn  DateTime?
+  ordenes      OrdenProyecto[]
+}
+
+model Material {
+  id              String            @id @default(cuid())
+  codigo          String            @unique
+  descripcion     String
+  unidad          String
+  categoria       String
+  costoReferencia Decimal           @db.Decimal(18, 4)
+  activo          Boolean           @default(true)
+  creadoEn        DateTime          @default(now())
+  modificadoEn    DateTime          @updatedAt
+  eliminadoEn     DateTime?
+  consumos        ConsumoMaterial[]
+}
+
+enum TipoTrabajador {
+  FABRICACION
+  INGENIERIA
+  AMBOS
+}
+
+model Trabajador {
+  id           String               @id @default(cuid())
+  nombre       String
+  documento    String?
+  cargo        String
+  tipo         TipoTrabajador
+  activo       Boolean              @default(true)
+  creadoEn     DateTime             @default(now())
+  modificadoEn DateTime             @updatedAt
+  eliminadoEn  DateTime?
+  tarifas      TarifaTrabajador[]
+  usuario      Usuario?
+  registrosMOD RegistroMOD[]
+  registrosIng RegistroIngenieria[]
+}
+
+model TarifaTrabajador {
+  id           String     @id @default(cuid())
+  trabajadorId String
+  trabajador   Trabajador @relation(fields: [trabajadorId], references: [id])
+  costoHora    Decimal    @db.Decimal(18, 4)
+  vigenteDesde DateTime   @db.Date
+  vigenteHasta DateTime?  @db.Date
+  creadoEn     DateTime   @default(now())
+
+  @@index([trabajadorId, vigenteDesde])
+}
+
+enum GrupoEtapa {
+  INGENIERIA_AUTOMATIZACION
+  PRUEBAS_PUESTA_MARCHA
+}
+
+model Etapa {
+  id        String                   @id @default(cuid())
+  nombre    String                   @unique
+  grupo     GrupoEtapa
+  orden     Int
+  activa    Boolean                  @default(true)
+  registros RegistroIngenieria[]
+  servicios ServicioAdicionalEtapa[]
+  consumos  ConsumoMaterial[]
+}
+
+// ───────────── Órdenes ─────────────
+
+enum EstadoOrden {
+  BORRADOR
+  COTIZADO
+  EN_INGENIERIA
+  EN_FABRICACION
+  EN_PRUEBAS
+  EN_PUESTA_MARCHA
+  TERMINADO
+  FACTURADO
+  ANULADO
+}
+
+model OrdenProyecto {
+  id                   String      @id @default(cuid())
+  codigo               String      @unique
+  clienteId            String?
+  cliente              Cliente?    @relation(fields: [clienteId], references: [id])
+  descripcion          String      @default("")
+  cantidadUnidades     Decimal     @default(1) @db.Decimal(18, 4)
+  fechaCreacion        DateTime    @db.Date
+  fechaEstimadaEntrega DateTime?   @db.Date
+  fechaTerminacion     DateTime?   @db.Date
+  estado               EstadoOrden @default(BORRADOR)
+  responsableId        String?
+  responsable          Usuario?    @relation("Responsable", fields: [responsableId], references: [id])
+  valorCotizado        Decimal?    @db.Decimal(18, 2)
+  margenEsperadoPct    Decimal?    @db.Decimal(9, 4)
+  margenMinimoPct      Decimal?    @db.Decimal(9, 4)
+  numeroFactura        String?
+  fechaFactura         DateTime?   @db.Date
+  observaciones        String?
+  /// Resumen de costos estimado al pasar a Cotizado (JSON serializado del motor).
+  estimadoAlCotizar    Json?
+  /// Resumen de costos congelado al cierre.
+  snapshotCierre       Json?
+  cerradoPorId         String?
+  cerradoEn            DateTime?
+  creadoPorId          String?
+  creadoEn             DateTime    @default(now())
+  modificadoPorId      String?
+  modificadoEn         DateTime    @updatedAt
+  eliminadoEn          DateTime?
+
+  materiales  ConsumoMaterial[]
+  registrosMOD RegistroMOD[]
+  registrosIng RegistroIngenieria[]
+  servicios   ServicioAdicionalEtapa[]
+  asignacionCIF AsignacionCIF?
+  historial   HistorialEstado[]
+  tecnicos    AsignacionTecnico[]
+
+  @@index([estado])
+  @@index([clienteId])
+}
+
+/// Técnicos / ingenieros asignados a una orden (pueden registrar horas en ella).
+model AsignacionTecnico {
+  ordenId      String
+  trabajadorId String
+  orden        OrdenProyecto @relation(fields: [ordenId], references: [id], onDelete: Cascade)
+
+  @@id([ordenId, trabajadorId])
+}
+
+model ConsumoMaterial {
+  id                    String        @id @default(cuid())
+  ordenId               String
+  orden                 OrdenProyecto @relation(fields: [ordenId], references: [id])
+  materialId            String
+  material              Material      @relation(fields: [materialId], references: [id])
+  etapaId               String?
+  etapa                 Etapa?        @relation(fields: [etapaId], references: [id])
+  cantidadRequerida     Decimal       @default(0) @db.Decimal(18, 4)
+  cantidadEntregada     Decimal?      @db.Decimal(18, 4)
+  cantidadUtilizada     Decimal       @default(0) @db.Decimal(18, 4)
+  cantidadDevuelta      Decimal       @default(0) @db.Decimal(18, 4)
+  causaMerma            String?
+  costoUnitarioAplicado Decimal       @db.Decimal(18, 4)
+  creadoEn              DateTime      @default(now())
+  modificadoEn          DateTime      @updatedAt
+  eliminadoEn           DateTime?
+
+  @@index([ordenId])
+}
+
+model RegistroMOD {
+  id             String        @id @default(cuid())
+  ordenId        String
+  orden          OrdenProyecto @relation(fields: [ordenId], references: [id])
+  trabajadorId   String?
+  trabajador     Trabajador?   @relation(fields: [trabajadorId], references: [id])
+  cargo          String?
+  actividad      String
+  fecha          DateTime      @db.Date
+  horas          Decimal       @db.Decimal(18, 4)
+  tarifaAplicada Decimal       @db.Decimal(18, 4)
+  creadoPorId    String?
+  creadoEn       DateTime      @default(now())
+  modificadoEn   DateTime      @updatedAt
+  eliminadoEn    DateTime?
+
+  @@index([ordenId])
+}
+
+model RegistroIngenieria {
+  id                   String        @id @default(cuid())
+  ordenId              String
+  orden                OrdenProyecto @relation(fields: [ordenId], references: [id])
+  etapaId              String
+  etapa                Etapa         @relation(fields: [etapaId], references: [id])
+  responsableId        String
+  responsable          Trabajador    @relation(fields: [responsableId], references: [id])
+  fechaInicio          DateTime      @db.Date
+  fechaFin             DateTime      @db.Date
+  horas                Decimal       @db.Decimal(18, 4)
+  costoHoraAplicado    Decimal       @db.Decimal(18, 4)
+  descripcion          String
+  observacionesTecnicas String?
+  creadoPorId          String?
+  creadoEn             DateTime      @default(now())
+  modificadoEn         DateTime      @updatedAt
+  eliminadoEn          DateTime?
+
+  @@index([ordenId])
+}
+
+model ServicioAdicionalEtapa {
+  id          String        @id @default(cuid())
+  ordenId     String
+  orden       OrdenProyecto @relation(fields: [ordenId], references: [id])
+  etapaId     String
+  etapa       Etapa         @relation(fields: [etapaId], references: [id])
+  descripcion String
+  valor       Decimal       @db.Decimal(18, 2)
+  creadoEn    DateTime      @default(now())
+  modificadoEn DateTime     @updatedAt
+  eliminadoEn DateTime?
+
+  @@index([ordenId])
+}
+
+// ───────────── CIF ─────────────
+
+enum BaseCIF {
+  HORAS_MOD
+  HORAS_TOTALES
+  COSTO_MOD
+  COSTO_DIRECTO
+  NUMERO_PROYECTOS
+}
+
+model ParametroCIF {
+  id                 String   @id @default(cuid())
+  periodo            String   @unique // aaaa-mm
+  base               BaseCIF
+  /// Tasa ingresada directamente ($/hora, % o $/proyecto según la base).
+  tasaDirecta        Decimal? @db.Decimal(18, 6)
+  cifPresupuestado   Decimal? @db.Decimal(18, 2)
+  baseEstimada       Decimal? @db.Decimal(18, 4)
+  observaciones      String?
+  modificadoEn       DateTime @updatedAt
+  creadoEn           DateTime @default(now())
+}
+
+model AsignacionCIF {
+  id                      String        @id @default(cuid())
+  ordenId                 String        @unique
+  orden                   OrdenProyecto @relation(fields: [ordenId], references: [id])
+  periodo                 String
+  base                    BaseCIF
+  tasaAplicada            Decimal       @db.Decimal(18, 6)
+  /// Cantidad de la base y valor al momento de la última asignación (informativos; el motor recalcula mientras esté abierta).
+  cantidadBase            Decimal       @db.Decimal(18, 4)
+  valorAsignado           Decimal       @db.Decimal(18, 2)
+  justificacionCambioBase String?
+  usuarioId               String?
+  fecha                   DateTime      @default(now())
+}
+
+// ───────────── Trazabilidad ─────────────
+
+model HistorialEstado {
+  id             String        @id @default(cuid())
+  ordenId        String
+  orden          OrdenProyecto @relation(fields: [ordenId], references: [id])
+  estadoAnterior EstadoOrden?
+  estadoNuevo    EstadoOrden
+  comentario     String?
+  usuarioId      String?
+  usuarioNombre  String?
+  fecha          DateTime      @default(now())
+
+  @@index([ordenId])
+}
+
+model Auditoria {
+  id            String   @id @default(cuid())
+  entidad       String
+  entidadId     String
+  campo         String
+  valorAnterior String?
+  valorNuevo    String?
+  usuarioId     String?
+  usuarioNombre String?
+  fecha         DateTime @default(now())
+
+  @@index([entidad, entidadId])
+}

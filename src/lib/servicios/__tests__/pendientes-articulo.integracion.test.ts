@@ -68,7 +68,7 @@ describe("Kárdex: entradas, requisiciones a órdenes y devoluciones (promedio p
     await expect(registrarRequisicion(prisma, coordinador, orden.id, { materialId: cable.id, fecha: f("07"), cantidad: "500", solicitante: "x" })).rejects.toThrow(/Existencias insuficientes/);
     await expect(registrarAjuste(prisma, coordinador, { materialId: cable.id, fecha: f("07"), tipo: "AJUSTE_NEGATIVO", cantidad: "1" })).rejects.toThrow(/motivo/);
     await registrarAjuste(prisma, coordinador, { materialId: cable.id, fecha: f("07"), tipo: "AJUSTE_NEGATIVO", cantidad: "1", observaciones: "Conteo físico" });
-    await expect(eliminarConsumo(prisma, coordinador, orden.id, linea.id)).rejects.toThrow(/devolución/);
+    await expect(eliminarConsumo(prisma, coordinador, orden.id, linea.id)).rejects.toThrow(/cantidad utilizada/);
 
     await cambiarEstado(prisma, coordinador, orden.id, "COTIZADO");
     await cambiarEstado(prisma, contador, orden.id, "TERMINADO", { comentario: "Cierre" });
@@ -81,6 +81,57 @@ describe("Kárdex: entradas, requisiciones a órdenes y devoluciones (promedio p
     const orden = await crearOrden(prisma, coordinador, await datosOrden());
     await guardarConsumo(prisma, coordinador, orden.id, { materialId: m.id, cantidadRequerida: "5", cantidadEntregada: "5", cantidadUtilizada: "5" });
     await expect(registrarRequisicion(prisma, coordinador, orden.id, { materialId: m.id, fecha: `${anio}-01-05`, cantidad: "1", solicitante: "x" })).rejects.toThrow(/manualmente/);
+  });
+});
+
+describe("Eliminar líneas alimentadas por el kárdex", () => {
+  const f = (dia: string) => `${anio}-01-${dia}`;
+
+  it("requisición 100 y devolución 100: la línea se elimina sin tocar el inventario", async () => {
+    const m = await materialDePrueba("1000");
+    await registrarEntrada(prisma, coordinador, { materialId: m.id, fecha: f("03"), cantidad: "500", costoUnitario: "1000" });
+    const orden = await crearOrden(prisma, coordinador, await datosOrden());
+    await registrarRequisicion(prisma, coordinador, orden.id, { materialId: m.id, fecha: f("05"), cantidad: "100", solicitante: "x" });
+    const linea = (await cargarOrden(prisma, orden.id)).materiales[0];
+    await registrarDevolucion(prisma, coordinador, orden.id, { consumoId: linea.id, fecha: f("05"), cantidad: "100" });
+
+    await eliminarConsumo(prisma, coordinador, orden.id, linea.id);
+    const o = await cargarOrden(prisma, orden.id);
+    expect(o.materiales).toHaveLength(0);
+    expect((await resumenOrden(prisma, o)).elementos.materialesDirectos).toBe("0");
+    expect(await prisma.movimientoInventario.count({ where: { consumoId: linea.id } })).toBe(2);
+    expect((await saldoMaterial(prisma, m.id)).cantidad.toString()).toBe("500");
+  });
+
+  it("con unidades pendientes las devuelve automáticamente y permite volver a pedir el material", async () => {
+    const m = await materialDePrueba("1000");
+    await registrarEntrada(prisma, coordinador, { materialId: m.id, fecha: f("03"), cantidad: "50", costoUnitario: "1000" });
+    const orden = await crearOrden(prisma, coordinador, await datosOrden());
+    await registrarRequisicion(prisma, coordinador, orden.id, { materialId: m.id, fecha: f("05"), cantidad: "40", solicitante: "x" });
+    const linea = (await cargarOrden(prisma, orden.id)).materiales[0];
+
+    await expect(eliminarConsumo(prisma, await usuarioDePrueba("ADMINISTRADOR").then((a) => ({ ...a, rol: "COORDINADOR" as const, permisos: new Set(["ordenes.editar", "ordenes.verTodas"] as const) })), orden.id, linea.id)).rejects.toBeInstanceOf(ErrorPermiso);
+    await eliminarConsumo(prisma, coordinador, orden.id, linea.id);
+    const devolucion = await prisma.movimientoInventario.findFirst({ where: { consumoId: linea.id, tipo: "DEVOLUCION_ORDEN" } });
+    expect(devolucion?.cantidad.toString()).toBe("40");
+    expect(devolucion?.observaciones).toMatch(/automática/);
+    expect((await saldoMaterial(prisma, m.id)).cantidad.toString()).toBe("50");
+    expect((await cargarOrden(prisma, orden.id)).materiales).toHaveLength(0);
+
+    await registrarRequisicion(prisma, coordinador, orden.id, { materialId: m.id, fecha: f("06"), cantidad: "5", solicitante: "x" });
+    const nueva = (await cargarOrden(prisma, orden.id)).materiales;
+    expect(nueva).toHaveLength(1);
+    expect(nueva[0].cantidadEntregada?.toString()).toBe("5");
+  });
+
+  it("no elimina una línea con cantidad utilizada", async () => {
+    const m = await materialDePrueba("1000");
+    await registrarEntrada(prisma, coordinador, { materialId: m.id, fecha: f("03"), cantidad: "10", costoUnitario: "1000" });
+    const orden = await crearOrden(prisma, coordinador, await datosOrden());
+    await registrarRequisicion(prisma, coordinador, orden.id, { materialId: m.id, fecha: f("05"), cantidad: "10", solicitante: "x" });
+    const linea = (await cargarOrden(prisma, orden.id)).materiales[0];
+    await guardarConsumo(prisma, coordinador, orden.id, { id: linea.id, materialId: m.id, cantidadUtilizada: "8" });
+    await expect(eliminarConsumo(prisma, coordinador, orden.id, linea.id)).rejects.toThrow(/cantidad utilizada/);
   });
 });
 

@@ -2,12 +2,15 @@ import { z } from "zod";
 import {
   calcularLineaMaterial,
   calcularRegistroMOD,
+  d,
+  hoyBogota,
   validarRegistroIngenieria,
   ErrorCosteo,
 } from "@/lib/costeo";
 import { exigir, ErrorPermiso, tiene, type UsuarioActual } from "@/lib/auth/permisos";
 import { auditar } from "./auditoria";
 import { exigirEditable, exigirVerOrden } from "./ordenes";
+import { registrarDevolucion, saldoMaterial } from "./inventario";
 import { tarifaVigente } from "./tarifas";
 import { aFechaDB, ErrorNegocio, txt, type Tx } from "./util";
 
@@ -127,8 +130,28 @@ export async function eliminarConsumo(tx: Tx, u: UsuarioActual, ordenId: string,
   await ordenParaEditar(tx, u, ordenId);
   const antes = await tx.consumoMaterial.findFirst({ where: { id, ordenId, eliminadoEn: null }, include: { _count: { select: { movimientos: true } } } });
   if (!antes) throw new ErrorNegocio("La línea de material no existe");
-  if (antes._count.movimientos > 0)
-    throw new ErrorNegocio("La línea tiene movimientos de inventario. Registre la devolución al almacén en lugar de eliminarla");
+  if (antes._count.movimientos > 0) {
+    // Línea alimentada por el kárdex (por ejemplo, una requisición registrada por error).
+    // Los movimientos no se borran: lo pendiente se devuelve al almacén y la línea se elimina.
+    if (!antes.cantidadUtilizada.isZero())
+      throw new ErrorNegocio(
+        "La línea tiene cantidad utilizada registrada. Si fue un error, deje la cantidad utilizada en cero y vuelva a intentarlo",
+      );
+    const pendiente = d(txt(antes.cantidadEntregada)).minus(d(antes.cantidadDevuelta.toString()));
+    if (pendiente.greaterThan(0)) {
+      if (!tiene(u, "inventario.gestionar"))
+        throw new ErrorPermiso("La línea tiene material entregado por el almacén; solo quien gestiona el inventario puede eliminarla");
+      // Fecha: hoy, o la del último movimiento del material si es posterior (p. ej., una requisición con fecha futura por error).
+      const { ultimaFecha } = await saldoMaterial(tx, antes.materialId);
+      const hoy = hoyBogota();
+      await registrarDevolucion(tx, u, ordenId, {
+        consumoId: id,
+        fecha: ultimaFecha && ultimaFecha > hoy ? ultimaFecha : hoy,
+        cantidad: pendiente.toString(),
+        observaciones: "Devolución automática al eliminar la línea de la orden",
+      });
+    }
+  }
   await tx.consumoMaterial.update({ where: { id }, data: { eliminadoEn: new Date() } });
   await auditar(tx, u, "ConsumoMaterial", id, antes, null, ["materialId", "cantidadUtilizada", "costoUnitarioAplicado"]);
 }

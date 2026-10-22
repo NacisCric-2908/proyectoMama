@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { formatearCantidad, formatearPesos, formatearPorcentaje, hoyBogota, NOMBRE_CLASIFICACION_MERMA } from "@/lib/costeo";
+import { d, formatearCantidad, formatearPesos, formatearPorcentaje, hoyBogota, NOMBRE_CLASIFICACION_MERMA } from "@/lib/costeo";
 import type { OrdenCompleta, ResumenSerializado } from "@/lib/servicios/ordenes";
 import { CATEGORIAS_MATERIAL } from "@/lib/servicios/catalogos";
 import { txt } from "@/lib/servicios/util";
@@ -121,7 +121,7 @@ export async function TabMateriales({
                               />
                             </div>
                           </details>
-                          {db._count.movimientos > 0 ? (
+                          {db._count.movimientos > 0 && (
                             puedeInventario && (
                               <details>
                                 <summary className="cursor-pointer text-xs text-primario">Devolver al almacén</summary>
@@ -146,9 +146,17 @@ export async function TabMateriales({
                                 </div>
                               </details>
                             )
-                          ) : (
-                            <EliminarLinea ordenId={orden.id} tipo="material" lineaId={db.id} />
                           )}
+                          <EliminarLinea
+                            ordenId={orden.id}
+                            tipo="material"
+                            lineaId={db.id}
+                            confirmar={
+                              db._count.movimientos > 0 && d(l.entregada).minus(d(l.devuelta)).greaterThan(0)
+                                ? `¿Eliminar esta línea? Las ${formatearCantidad(d(l.entregada).minus(d(l.devuelta)))} ${l.unidad ?? "unidades"} pendientes se devolverán automáticamente al almacén. Los movimientos quedan en el kárdex como historial.`
+                                : "¿Eliminar esta línea de material?"
+                            }
+                          />
                         </td>
                       )}
                     </tr>

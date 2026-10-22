@@ -59,6 +59,11 @@ test.describe.serial("flujo principal", () => {
     await filaCable.getByLabel(/Cantidad/).fill("10");
     await filaCable.getByRole("button", { name: "Registrar devolución" }).click();
     await expect(page.getByText("Devolución al almacén registrada")).toBeVisible();
+    // La línea de la requisición se puede eliminar (p. ej., si se registró por error)
+    await page.getByRole("row", { name: /CAB-01/ }).getByText("Devolver al almacén").click(); // cerrar el panel
+    page.once("dialog", (d) => d.accept());
+    await page.getByRole("row", { name: /CAB-01/ }).getByRole("button", { name: "Eliminar" }).click();
+    await expect(page.getByRole("row", { name: /CAB-01/ })).toHaveCount(0);
 
     // Mano de obra: tarifa vigente prellenada ($35.000) → 10 h = $350.000
     await page.goto(`${urlOrden}?tab=mano-obra`);

@@ -4,9 +4,13 @@ import type { OrdenCompleta, ResumenSerializado } from "@/lib/servicios/ordenes"
 import { txt } from "@/lib/servicios/util";
 import { ListaAlertas, Tarjeta } from "@/components/ui";
 import { EstimadoVsReal, TablaCostos } from "./TablaCostos";
+import { ComparacionPresupuesto } from "./ComparacionPresupuesto";
+import { CostoAjustado } from "./CostoAjustado";
+import { comparacionesDe } from "@/lib/servicios/presupuestos";
 
-export function TabCotizacion({ orden, resumen }: { orden: OrdenCompleta; resumen: ResumenSerializado }) {
+export function TabCotizacion({ orden, resumen, puedeExplicar }: { orden: OrdenCompleta; resumen: ResumenSerializado; puedeExplicar: boolean }) {
   const estimado = orden.estimadoAlCotizar as unknown as ResumenSerializado | null;
+  const comp = comparacionesDe(orden.presupuestos, resumen);
   return (
     <div className="flex flex-col gap-4">
       <div className="grid gap-4 lg:grid-cols-2">
@@ -35,11 +39,37 @@ export function TabCotizacion({ orden, resumen }: { orden: OrdenCompleta; resume
           </div>
         </Tarjeta>
       </div>
-      <Tarjeta titulo="Estimado al cotizar vs real" acciones={<Link href={`/ordenes/${orden.id}/informe`} className="text-sm text-primario hover:underline">Ver informe →</Link>}>
-        {estimado ? (
-          <EstimadoVsReal estimado={estimado} real={resumen} />
+      {orden.ajustesCIF[0] && (
+        <Tarjeta titulo="Costo ajustado (conciliación del CIF real)">
+          <CostoAjustado ajuste={orden.ajustesCIF[0]} valorCotizado={txt(orden.valorCotizado)} />
+        </Tarjeta>
+      )}
+      <Tarjeta titulo="Presupuesto vs costo acumulado" acciones={<Link href={`/ordenes/${orden.id}/informe`} className="text-sm text-primario hover:underline">Ver informe →</Link>}>
+        {comp.vsOriginal ? (
+          <div className="flex flex-col gap-4">
+            <ComparacionPresupuesto
+              c={comp.vsOriginal}
+              titulo={`Presupuesto original (v${comp.original!.version})`}
+              explicar={{ ordenId: orden.id, presupuestoId: comp.original!.id, explicaciones: orden.explicaciones, puede: puedeExplicar }}
+            />
+            {comp.vsVigente && (
+              <ComparacionPresupuesto
+                c={comp.vsVigente}
+                titulo={`Presupuesto vigente (v${comp.vigente!.version})`}
+                explicar={{ ordenId: orden.id, presupuestoId: comp.vigente!.id, explicaciones: orden.explicaciones, puede: puedeExplicar }}
+              />
+            )}
+          </div>
         ) : (
-          <p className="text-sm text-tenue">La estimación se guarda cuando la orden pasa de Borrador a Cotizado.</p>
+          <div className="text-sm text-tenue">
+            <p className="text-advertencia">La orden no tiene un presupuesto de costo aprobado. Regístrelo en la pestaña Presupuesto.</p>
+            {estimado && (
+              <div className="mt-3">
+                <p className="mb-2">Estimación automática guardada al cotizar (materiales según la lista técnica):</p>
+                <EstimadoVsReal estimado={estimado} real={resumen} />
+              </div>
+            )}
+          </div>
         )}
       </Tarjeta>
     </div>

@@ -9,7 +9,7 @@ import { exigir, ErrorPermiso, tiene, type UsuarioActual } from "@/lib/auth/perm
 import { auditar } from "./auditoria";
 import { exigirEditable, exigirVerOrden } from "./ordenes";
 import { tarifaVigente } from "./tarifas";
-import { aFechaDB, ErrorNegocio, type Tx } from "./util";
+import { aFechaDB, ErrorNegocio, txt, type Tx } from "./util";
 
 const num = (requerido: boolean) =>
   z
@@ -61,6 +61,13 @@ export const esquemaConsumo = z.object({
   cantidadDevuelta: num(false),
   causaMerma: texto,
   costoUnitario: num(false),
+  clasificacionMerma: z
+    .enum(["NORMAL", "ANORMAL", "RECUPERABLE", ""])
+    .optional()
+    .nullable()
+    .transform((v) => (v ? v : null)),
+  disposicionMerma: texto,
+  valorRecuperado: num(false),
 });
 
 export async function guardarConsumo(tx: Tx, u: UsuarioActual, ordenId: string, entrada: z.input<typeof esquemaConsumo>) {
@@ -70,19 +77,29 @@ export async function guardarConsumo(tx: Tx, u: UsuarioActual, ordenId: string, 
   const material = await tx.material.findUnique({ where: { id: e.materialId } });
   if (!material) throw new ErrorNegocio("El material no existe");
 
-  const antes = e.id ? await tx.consumoMaterial.findFirst({ where: { id: e.id, ordenId, eliminadoEn: null } }) : null;
+  const antes = e.id
+    ? await tx.consumoMaterial.findFirst({ where: { id: e.id, ordenId, eliminadoEn: null }, include: { _count: { select: { movimientos: true } } } })
+    : null;
   if (e.id && !antes) throw new ErrorNegocio("La línea de material no existe");
+  // En las líneas alimentadas por el kárdex, entregada, devuelta y costo provienen de los movimientos.
+  const kardex = !!antes && antes._count.movimientos > 0;
+  if (kardex && e.materialId !== antes!.materialId) throw new ErrorNegocio("No se puede cambiar el material de una línea con movimientos de inventario");
 
   // El costo unitario se copia del catálogo al crear la línea; luego solo cambia si se edita explícitamente.
-  const costoUnitario = e.costoUnitario ?? antes?.costoUnitarioAplicado.toString() ?? material.costoReferencia.toString();
+  const costoUnitario = kardex
+    ? antes!.costoUnitarioAplicado.toString()
+    : e.costoUnitario ?? antes?.costoUnitarioAplicado.toString() ?? material.costoReferencia.toString();
   const datos = {
     materialId: e.materialId,
     etapaId: e.etapaId,
     cantidadRequerida: e.cantidadRequerida ?? "0",
-    cantidadEntregada: e.cantidadEntregada,
+    cantidadEntregada: kardex ? txt(antes!.cantidadEntregada) : e.cantidadEntregada,
     cantidadUtilizada: e.cantidadUtilizada ?? "0",
-    cantidadDevuelta: e.cantidadDevuelta ?? "0",
+    cantidadDevuelta: kardex ? antes!.cantidadDevuelta.toString() : e.cantidadDevuelta ?? "0",
     causaMerma: e.causaMerma,
+    clasificacionMerma: e.clasificacionMerma,
+    disposicionMerma: e.disposicionMerma,
+    valorRecuperado: e.valorRecuperado ?? "0",
     costoUnitarioAplicado: costoUnitario,
   };
   motor(() =>
@@ -93,6 +110,8 @@ export async function guardarConsumo(tx: Tx, u: UsuarioActual, ordenId: string, 
       utilizada: datos.cantidadUtilizada,
       devuelta: datos.cantidadDevuelta,
       costoUnitario,
+      clasificacionMerma: datos.clasificacionMerma,
+      valorRecuperado: datos.valorRecuperado,
     }),
   );
 
@@ -106,8 +125,10 @@ export async function guardarConsumo(tx: Tx, u: UsuarioActual, ordenId: string, 
 export async function eliminarConsumo(tx: Tx, u: UsuarioActual, ordenId: string, id: string) {
   exigir(u, "ordenes.editar");
   await ordenParaEditar(tx, u, ordenId);
-  const antes = await tx.consumoMaterial.findFirst({ where: { id, ordenId, eliminadoEn: null } });
+  const antes = await tx.consumoMaterial.findFirst({ where: { id, ordenId, eliminadoEn: null }, include: { _count: { select: { movimientos: true } } } });
   if (!antes) throw new ErrorNegocio("La línea de material no existe");
+  if (antes._count.movimientos > 0)
+    throw new ErrorNegocio("La línea tiene movimientos de inventario. Registre la devolución al almacén en lugar de eliminarla");
   await tx.consumoMaterial.update({ where: { id }, data: { eliminadoEn: new Date() } });
   await auditar(tx, u, "ConsumoMaterial", id, antes, null, ["materialId", "cantidadUtilizada", "costoUnitarioAplicado"]);
 }

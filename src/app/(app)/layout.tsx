@@ -10,8 +10,10 @@ const MENU: { href: string; texto: string; permisos: ClavePermiso[] | null }[] =
   { href: "/mis-horas", texto: "Mis horas", permisos: ["horas.registrarPropias"] },
   { href: "/clientes", texto: "Clientes", permisos: ["clientes.gestionar"] },
   { href: "/materiales", texto: "Materiales", permisos: ["materiales.gestionar"] },
+  { href: "/inventario", texto: "Inventario", permisos: ["inventario.gestionar", "costos.ver"] },
   { href: "/trabajadores", texto: "Trabajadores", permisos: ["trabajadores.gestionar"] },
-  { href: "/cif", texto: "CIF", permisos: ["cif.configurar"] },
+  { href: "/cif", texto: "CIF", permisos: ["cif.configurar", "cif.conciliar"] },
+  { href: "/reportes/rentabilidad", texto: "Rentabilidad", permisos: ["margenes.ver"] },
   { href: "/admin", texto: "Administración", permisos: ["usuarios.gestionar", "parametros.gestionar"] },
 ];
 

@@ -18,6 +18,7 @@ import {
   etapasCatalogo,
   exigirVerOrden,
   parametros,
+  politicasDe,
   type SnapshotCierre,
 } from "./ordenes";
 import { aFechaDB, aISO, ErrorNegocio, type Tx } from "./util";
@@ -65,7 +66,14 @@ export async function cambiarEstado(
   if (!v.ok) throw new ErrorNegocio(v.error, v.faltantes);
 
   if (v.tipo === "cierre" || v.tipo === "facturacion") exigir(u, "ordenes.cerrar");
-  else if (v.tipo === "reapertura") exigir(u, "ordenes.reabrir");
+  else if (v.tipo === "reapertura") {
+    exigir(u, "ordenes.reabrir");
+    const conciliada = orden.ajustesCIF[0]?.conciliacion;
+    if (conciliada)
+      throw new ErrorNegocio(
+        `El CIF del período ${conciliada.periodo} ya está conciliado con esta orden. Anule primero la conciliación para reabrirla`,
+      );
+  }
   else if (v.tipo === "retroceso" && actual === "FACTURADO") exigir(u, "ordenes.cerrar");
   else exigir(u, "ordenes.cambiarEstado");
 
@@ -80,7 +88,7 @@ export async function cambiarEstado(
     if (!orden.estimadoAlCotizar) {
       const [etapas, p] = await Promise.all([etapasCatalogo(tx), parametros(tx)]);
       try {
-        const estimado = calcularResumenEstimado(entradaMotor(orden, etapas, p.umbralMermaPct.toString()));
+        const estimado = calcularResumenEstimado(entradaMotor(orden, etapas, politicasDe(p)));
         datos.estimadoAlCotizar = serializar(estimado) as unknown as Prisma.InputJsonValue;
       } catch (e) {
         if (e instanceof ErrorCosteo) throw new ErrorNegocio(e.message);

@@ -9,7 +9,7 @@ import {
   type ResultadoIngenieria,
   type ServicioAdicionalEntrada,
 } from "./ingenieria";
-import { calcularCIF, type BaseCIF, type ResultadoCIF } from "./cif";
+import { calcularCIF, type BaseCIF, type ResultadoCIF, type TasaActividad } from "./cif";
 import { evaluarAlertas, type Alerta } from "./alertas";
 import { esEditable, estaCerrada, type EstadoOrden } from "./estados";
 
@@ -101,7 +101,9 @@ export interface EntradaOrden {
   ingenieria: RegistroIngenieriaEntrada[];
   servicios?: ServicioAdicionalEntrada[];
   /** Asignación de CIF guardada en la orden (snapshot de la tasa). null = sin asignar. */
-  cif?: { base: BaseCIF; tasa: Num } | null;
+  cif?: { base: BaseCIF; tasa: Num; tasasActividad?: TasaActividad[] } | null;
+  /** Política: llevar la merma anormal a pérdida del período en lugar del costo de la orden. */
+  excluirMermaAnormal?: boolean;
 }
 
 export interface ResumenCostos extends Totales {
@@ -117,10 +119,12 @@ export interface ResumenCostos extends Totales {
   mostrarCostoEstimadoMateriales: boolean;
   alertas: Alerta[];
   advertencias: string[];
+  /** Merma anormal excluida del costo de la orden y reconocida como pérdida del período. */
+  perdidaMermaAnormal: Decimal;
 }
 
 export function calcularResumen(o: EntradaOrden): ResumenCostos {
-  const materiales = calcularMateriales(o.materiales);
+  const materiales = calcularMateriales(o.materiales, { excluirMermaAnormal: o.excluirMermaAnormal });
   const mod = calcularMOD(o.mod);
   const ingenieria = calcularIngenieria(o.etapas, o.ingenieria, o.servicios ?? []);
   const costoDirecto = materiales.costoMaterialesDirectos.plus(mod.costoMOD);
@@ -131,7 +135,10 @@ export function calcularResumen(o: EntradaOrden): ResumenCostos {
         horasIngenieria: ingenieria.horasIngenieria,
         costoMOD: mod.costoMOD,
         costoDirecto,
-      })
+        costoMateriales: materiales.costoMaterialesDirectos,
+        horasIngAutomatizacion: ingenieria.porGrupo.INGENIERIA_AUTOMATIZACION.horas,
+        horasPruebasPuestaMarcha: ingenieria.porGrupo.PRUEBAS_PUESTA_MARCHA.horas,
+      }, o.cif.tasasActividad ?? [])
     : null;
 
   const elementos: ElementosCosto = {
@@ -173,6 +180,7 @@ export function calcularResumen(o: EntradaOrden): ResumenCostos {
       (o.estado === "BORRADOR" || o.estado === "COTIZADO") && !materiales.hayCantidadUtilizada,
     alertas,
     advertencias: ingenieria.advertencias,
+    perdidaMermaAnormal: materiales.mermaAnormalExcluida,
   };
 }
 

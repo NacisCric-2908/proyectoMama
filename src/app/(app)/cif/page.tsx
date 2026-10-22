@@ -1,23 +1,26 @@
+import Link from "next/link";
 import { requerirPagina } from "@/lib/auth/sesion";
 import { prisma } from "@/lib/db";
-import { BASES_CIF, formatearCantidad, formatearPesos, hoyBogota, type BaseCIF } from "@/lib/costeo";
+import { ACTIVIDADES_CIF, BASES_CIF, formatearCantidad, formatearPesos, hoyBogota, type ActividadCIF, type BaseCIF } from "@/lib/costeo";
 import { tasaDelParametro } from "@/lib/servicios/cif";
 import { FormularioAccion } from "@/components/FormularioAccion";
 import { AreaTexto, Boton, Campo, Entrada, Selector, Tarjeta, Titulo, Vacio } from "@/components/ui";
 import { accionGuardarParametroCIF } from "./acciones";
 
 export default async function CIF() {
-  await requerirPagina("cif.configurar");
-  const [parametros, generales] = await Promise.all([
-    prisma.parametroCIF.findMany({ orderBy: { periodo: "desc" } }),
+  await requerirPagina("cif.configurar", "cif.conciliar");
+  const [parametros, generales, vigentes] = await Promise.all([
+    prisma.parametroCIF.findMany({ orderBy: { periodo: "desc" }, include: { tasasActividad: true } }),
     prisma.parametrosGenerales.findUnique({ where: { id: 1 } }),
+    prisma.conciliacionCIF.findMany({ where: { anuladaEn: null }, select: { periodo: true } }),
   ]);
+  const conciliados = new Set(vigentes.map((v) => v.periodo));
   const filas = await Promise.all(
     parametros.map(async (p) => {
       try {
         return { p, ...(await tasaDelParametro(prisma, p)), error: null };
       } catch (e) {
-        return { p, tasa: null, detalle: null, error: (e as Error).message };
+        return { p, tasa: null, detalle: null, tasasActividad: null, error: (e as Error).message };
       }
     }),
   );
@@ -49,6 +52,34 @@ export default async function CIF() {
           <Campo etiqueta="Base total estimada" ayuda="Horas, $ o N.º de proyectos">
             <Entrada name="baseEstimada" inputMode="decimal" />
           </Campo>
+          <fieldset className="rounded-md border border-borde p-3 sm:col-span-3 lg:col-span-6">
+            <legend className="px-1 text-sm font-medium">Tasas por actividad (solo para la base «Tasas diferenciadas por actividad»)</legend>
+            <div className="grid gap-2 text-sm">
+              <div className="hidden grid-cols-4 gap-2 font-medium text-tenue sm:grid">
+                <span>Actividad e inductor</span>
+                <span>Tasa directa</span>
+                <span>CIF presupuestado de la actividad</span>
+                <span>Inductor estimado</span>
+              </div>
+              {(Object.keys(ACTIVIDADES_CIF) as ActividadCIF[]).map((a) => (
+                <div key={a} className="grid gap-2 sm:grid-cols-4">
+                  <span>
+                    {ACTIVIDADES_CIF[a].nombre}
+                    <span className="block text-xs text-tenue">
+                      {ACTIVIDADES_CIF[a].inductor} · {ACTIVIDADES_CIF[a].unidadTasa}
+                    </span>
+                  </span>
+                  <Entrada name={`act_${a}_tasaDirecta`} inputMode="decimal" aria-label={`Tasa directa ${ACTIVIDADES_CIF[a].nombre}`} />
+                  <Entrada name={`act_${a}_cifPresupuestado`} inputMode="decimal" aria-label={`CIF presupuestado ${ACTIVIDADES_CIF[a].nombre}`} />
+                  <Entrada name={`act_${a}_baseEstimada`} inputMode="decimal" aria-label={`Inductor estimado ${ACTIVIDADES_CIF[a].nombre}`} />
+                </div>
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-tenue">
+              Asignación diferenciada (enfoque híbrido de órdenes con elementos de costeo por actividades): cada actividad reparte su propio CIF con su inductor. Deje vacías las
+              actividades que no use.
+            </p>
+          </fieldset>
           <Campo etiqueta="Observaciones" className="sm:col-span-3 lg:col-span-5">
             <AreaTexto name="observaciones" />
           </Campo>
@@ -61,7 +92,7 @@ export default async function CIF() {
           Para «Número de proyectos» la tasa es el CIF del período ÷ las órdenes terminadas en el mes (o la base estimada si aún no hay).
         </p>
       </Tarjeta>
-      <Tarjeta titulo="Períodos configurados">
+      <Tarjeta titulo="Períodos configurados" acciones={<span className="text-xs text-tenue">Abra un período para registrar el CIF real y conciliarlo</span>}>
         {filas.length === 0 ? (
           <Vacio>No hay períodos configurados.</Vacio>
         ) : (
@@ -79,13 +110,30 @@ export default async function CIF() {
                 </tr>
               </thead>
               <tbody>
-                {filas.map(({ p, tasa, detalle, error }) => (
+                {filas.map(({ p, tasa, detalle, error, tasasActividad }) => (
                   <tr key={p.id}>
-                    <td>{p.periodo}</td>
+                    <td>
+                      <Link href={`/cif/${p.periodo}`} className="font-medium text-primario hover:underline">
+                        {p.periodo}
+                      </Link>
+                      {conciliados.has(p.periodo) && <div className="text-xs text-exito">Conciliado</div>}
+                    </td>
                     <td>{BASES_CIF[p.base as BaseCIF].nombre}</td>
                     <td className="num">{p.cifPresupuestado ? formatearPesos(p.cifPresupuestado.toString()) : "—"}</td>
                     <td className="num">{p.baseEstimada ? formatearCantidad(p.baseEstimada.toString()) : "—"}</td>
-                    <td className="num">{tasa ? tasaTexto(p.base as BaseCIF, tasa) : <span className="text-peligro">{error}</span>}</td>
+                    <td className="num">
+                      {error ? (
+                        <span className="text-peligro">{error}</span>
+                      ) : tasasActividad ? (
+                        tasasActividad.map((t) => (
+                          <div key={t.actividad} className="text-xs">
+                            {ACTIVIDADES_CIF[t.actividad].nombre}: {ACTIVIDADES_CIF[t.actividad].esPorcentaje ? `${formatearCantidad(t.tasa)} %` : formatearPesos(t.tasa)}
+                          </div>
+                        ))
+                      ) : (
+                        tasa && tasaTexto(p.base as BaseCIF, tasa)
+                      )}
+                    </td>
                     <td className="text-tenue">{detalle}</td>
                     <td>{p.observaciones}</td>
                   </tr>

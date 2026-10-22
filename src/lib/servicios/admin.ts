@@ -53,6 +53,7 @@ export const esquemaParametros = z.object({
   formatoCodigoOrden: z.string().trim().refine((v) => /\{N+\}/.test(v), "El formato debe incluir el consecutivo, por ejemplo {NNNN}"),
   baseCifDefecto: z.enum(["HORAS_MOD", "HORAS_TOTALES", "COSTO_MOD", "COSTO_DIRECTO", "NUMERO_PROYECTOS"]),
   umbralMermaPct: z.string().trim().transform((v) => v.replace(",", ".")).refine((v) => /^\d+(\.\d+)?$/.test(v), "Umbral inválido"),
+  excluirMermaAnormal: z.string().optional().transform((v) => v === "true"),
 });
 
 export async function guardarParametros(tx: Tx, u: UsuarioActual, entrada: unknown, logo?: string | null) {

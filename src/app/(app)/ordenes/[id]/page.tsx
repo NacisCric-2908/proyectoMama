@@ -15,6 +15,7 @@ import { TabIngenieria } from "@/components/orden/TabIngenieria";
 import { TabCIF } from "@/components/orden/TabCIF";
 import { TabCotizacion } from "@/components/orden/TabCotizacion";
 import { TabHistorial } from "@/components/orden/TabHistorial";
+import { TabPresupuesto } from "@/components/orden/TabPresupuesto";
 
 const PESTANAS = [
   ["datos", "Datos generales"],
@@ -22,6 +23,7 @@ const PESTANAS = [
   ["mano-obra", "Mano de obra"],
   ["ingenieria", "Ingeniería y puesta en marcha"],
   ["cif", "CIF"],
+  ["presupuesto", "Presupuesto"],
   ["cotizacion", "Cotización y margen"],
   ["historial", "Historial"],
 ] as const;
@@ -55,11 +57,17 @@ export default async function DetalleOrden({ params, searchParams }: { params: P
               {orden.cliente?.nombre ?? "Sin cliente"} · Entrega: {formatearFecha(aISO(orden.fechaEstimadaEntrega)) || "—"}
             </p>
           </div>
-          <dl className="grid grid-cols-3 gap-x-6 text-sm">
+          <dl className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
             <div>
               <dt className="text-tenue">Costo acumulado</dt>
               <dd className="num text-base font-semibold">{formatearPesos(resumen.costoTotal)}</dd>
             </div>
+            {orden.ajustesCIF[0] && (
+              <div>
+                <dt className="text-tenue">Costo ajustado</dt>
+                <dd className="num text-base font-semibold">{formatearPesos(orden.ajustesCIF[0].costoAjustado.toString())}</dd>
+              </div>
+            )}
             {verMargen && (
               <>
                 <div>
@@ -97,13 +105,14 @@ export default async function DetalleOrden({ params, searchParams }: { params: P
       </nav>
 
       {tab === "datos" && <TabDatos orden={orden} usuario={u} editable={editable} />}
-      {tab === "materiales" && <TabMateriales orden={orden} resumen={resumen} editable={editable} />}
+      {tab === "materiales" && <TabMateriales orden={orden} resumen={resumen} editable={editable} puedeInventario={esEditable(estado) && tiene(u, "inventario.gestionar")} />}
       {tab === "mano-obra" && <TabManoObra orden={orden} resumen={resumen} usuario={u} editable={editable} />}
       {tab === "ingenieria" && <TabIngenieria orden={orden} resumen={resumen} usuario={u} editable={editable} />}
       {tab === "cif" && (
         <TabCIF ordenId={id} resumen={resumen} cif={cif} asignacion={orden.asignacionCIF} puedeAsignar={esEditable(estado) && tiene(u, "cif.asignar")} />
       )}
-      {tab === "cotizacion" && verMargen && <TabCotizacion orden={orden} resumen={resumen} />}
+      {tab === "presupuesto" && <TabPresupuesto orden={orden} resumen={resumen} usuario={u} />}
+      {tab === "cotizacion" && verMargen && <TabCotizacion orden={orden} resumen={resumen} puedeExplicar={tiene(u, "ordenes.editar") || tiene(u, "ordenes.cerrar")} />}
       {tab === "historial" && <TabHistorial orden={orden} verAuditoria={tiene(u, "auditoria.ver")} />}
     </div>
   );

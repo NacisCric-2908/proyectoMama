@@ -1,5 +1,5 @@
 import type { AsignacionCIF } from "@prisma/client";
-import { BASES_CIF, formatearCantidad, formatearFecha, formatearPesos, type BaseCIF } from "@/lib/costeo";
+import { ACTIVIDADES_CIF, BASES_CIF, formatearCantidad, formatearFecha, formatearPesos, type BaseCIF, type DetalleActividadCIF, type Serializado } from "@/lib/costeo";
 import type { ResumenSerializado } from "@/lib/servicios/ordenes";
 import type { estadoCIF } from "@/lib/servicios/cif";
 import { FormularioAccion } from "@/components/FormularioAccion";
@@ -40,7 +40,7 @@ export function TabCIF({
             </div>
             <div>
               <dt className="text-tenue">Tasa aplicada</dt>
-              <dd className="font-medium">{tasaTexto(r.base, r.tasa)}</dd>
+              <dd className="font-medium">{r.detalle ? "Por actividad (ver detalle)" : tasaTexto(r.base, r.tasa)}</dd>
             </div>
             <div>
               <dt className="text-tenue">CIF asignado</dt>
@@ -50,6 +50,7 @@ export function TabCIF({
         ) : (
           <p className="text-sm text-advertencia">La orden aún no tiene CIF asignado. Es obligatorio para cerrarla.</p>
         )}
+        {r?.detalle && <DetalleActividades detalle={r.detalle} />}
         {asignacion && (
           <p className="mt-3 text-xs text-tenue">
             Período {asignacion.periodo} · asignado el {formatearFecha(asignacion.fecha)}
@@ -61,7 +62,16 @@ export function TabCIF({
       <Tarjeta titulo={`Parámetro del período ${cif.periodo}`}>
         {cif.parametro ? (
           <p className="text-sm">
-            Base: <strong>{cif.parametro.nombreBase}</strong> · Tasa: <strong>{cif.parametro.tasa ? tasaTexto(cif.parametro.base, cif.parametro.tasa) : "—"}</strong>
+            Base: <strong>{cif.parametro.nombreBase}</strong> · Tasa:{" "}
+            <strong>
+              {cif.parametro.tasasActividad
+                ? cif.parametro.tasasActividad
+                    .map((t) => `${ACTIVIDADES_CIF[t.actividad].nombre} ${ACTIVIDADES_CIF[t.actividad].esPorcentaje ? `${formatearCantidad(t.tasa)} %` : formatearPesos(t.tasa)}`)
+                    .join(" · ")
+                : cif.parametro.tasa
+                  ? tasaTexto(cif.parametro.base, cif.parametro.tasa)
+                  : "—"}
+            </strong>
             {cif.parametro.detalle && <span className="text-tenue"> ({cif.parametro.detalle})</span>}
           </p>
         ) : (
@@ -85,7 +95,9 @@ export function TabCIF({
           <FormularioAccion accion={accion} className="grid items-end gap-3 sm:grid-cols-4">
             <Campo etiqueta="Base de asignación">
               <Selector name="base" required>
-                {Object.entries(BASES_CIF).map(([k, b]) => (
+                {Object.entries(BASES_CIF)
+                  .filter(([k]) => k !== "ACTIVIDADES")
+                  .map(([k, b]) => (
                   <option key={k} value={k}>
                     {b.nombre} ({b.unidadTasa})
                   </option>
@@ -105,5 +117,36 @@ export function TabCIF({
         </Tarjeta>
       )}
     </div>
+  );
+}
+
+/** Detalle del CIF por actividad: inductor, cantidad, tasa y valor. */
+export function DetalleActividades({ detalle }: { detalle: Serializado<DetalleActividadCIF>[] }) {
+  return (
+    <table className="tabla mt-3">
+      <thead>
+        <tr>
+          <th>Actividad</th>
+          <th>Inductor</th>
+          <th className="num">Cantidad</th>
+          <th className="num">Tasa</th>
+          <th className="num">CIF</th>
+        </tr>
+      </thead>
+      <tbody>
+        {detalle.map((x) => {
+          const pct = ACTIVIDADES_CIF[x.actividad].esPorcentaje;
+          return (
+            <tr key={x.actividad}>
+              <td>{x.nombre}</td>
+              <td>{x.inductor}</td>
+              <td className="num">{pct ? formatearPesos(x.cantidadBase) : formatearCantidad(x.cantidadBase)}</td>
+              <td className="num">{pct ? `${formatearCantidad(x.tasa)} %` : formatearPesos(x.tasa)}</td>
+              <td className="num">{formatearPesos(x.valor)}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   );
 }

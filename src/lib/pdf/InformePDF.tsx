@@ -7,8 +7,12 @@ import {
   formatearPesos,
   formatearPorcentaje,
   NOMBRE_ESTADO,
+  NOMBRE_CLASIFICACION_MERMA,
   NOMBRE_GRUPO,
+  NOMBRE_POLITICA,
+  type ComparacionPresupuesto,
   type EstadoOrden,
+  type PoliticaAjusteCIF,
 } from "@/lib/costeo";
 import type { ResumenSerializado } from "@/lib/servicios/ordenes";
 
@@ -66,9 +70,22 @@ export interface DatosInforme {
   estimado: ResumenSerializado | null;
   verMargen: boolean;
   cierre: { cerradoEn: string; cerradoPor: string } | null;
+  comparaciones: { titulo: string; c: ComparacionPresupuesto; explicaciones: { concepto: string; causa: string; explicacion: string }[] }[];
+  ajuste: {
+    periodo: string;
+    cifReal: string;
+    cifAplicadoPeriodo: string;
+    diferencia: string;
+    politica: PoliticaAjusteCIF;
+    ajuste: string;
+    costoAcumulado: string;
+    costoAjustado: string;
+    margenAjustado: string | null;
+    margenAjustadoPct: string | null;
+  } | null;
 }
 
-export function InformePDF({ empresa, logo, codigo, cliente, descripcion, estado, r, estimado, verMargen, cierre }: DatosInforme) {
+export function InformePDF({ empresa, logo, codigo, cliente, descripcion, estado, r, estimado, verMargen, cierre, comparaciones, ajuste }: DatosInforme) {
   const max = r.participacion.reduce((m, p) => (d(p.pct).greaterThan(m) ? d(p.pct) : m), d(0));
   const filasResumen = CONCEPTOS.map((c) => [c.nombre, formatearPesos(r.elementos[c.clave]), formatearPorcentaje(r.participacion.find((p) => p.clave === c.clave)!.pct)]);
   const sinCot = "Sin cotización";
@@ -144,9 +161,19 @@ export function InformePDF({ empresa, logo, codigo, cliente, descripcion, estado
               { t: "Código", w: 10 }, { t: "Descripción", w: 22 }, { t: "Und", w: 6 }, { t: "Req.", w: 8, num: true }, { t: "Entr.", w: 8, num: true },
               { t: "Util.", w: 8, num: true }, { t: "Merma", w: 8, num: true }, { t: "Costo unit.", w: 10, num: true }, { t: "Costo", w: 10, num: true }, { t: "C. merma", w: 10, num: true },
             ]}
-            filas={r.materiales.lineas.map((l) => [l.codigo ?? "", l.descripcion, l.unidad ?? "", formatearCantidad(l.requerida), formatearCantidad(l.entregada), formatearCantidad(l.utilizada), formatearCantidad(l.merma), formatearPesos(l.costoUnitario), formatearPesos(l.costoLinea), formatearPesos(l.costoMerma)])}
+            filas={r.materiales.lineas.map((l) => [l.codigo ?? "", l.descripcion, l.unidad ?? "", formatearCantidad(l.requerida), formatearCantidad(l.entregada), formatearCantidad(l.utilizada), formatearCantidad(l.merma), formatearPesos(l.costoUnitario), formatearPesos(l.costoLinea), formatearPesos(l.costoMermaNeto)])}
             total={["Totales", "", "", "", "", "", "", "", formatearPesos(r.materiales.costoMaterialesDirectos), formatearPesos(r.materiales.costoMermas)]}
           />
+          {(["NORMAL", "ANORMAL", "RECUPERABLE"] as const)
+            .filter((c) => !d(r.materiales.mermasPorClase[c]).isZero())
+            .map((c) => (
+              <Text key={c} style={s.tenue}>
+                Merma {NOMBRE_CLASIFICACION_MERMA[c].toLowerCase()}: {formatearPesos(r.materiales.mermasPorClase[c])}
+              </Text>
+            ))}
+          {!d(r.perdidaMermaAnormal).isZero() && (
+            <Text>Merma anormal reconocida como pérdida del período (excluida del costo): {formatearPesos(r.perdidaMermaAnormal)}</Text>
+          )}
         </View>
 
         <View style={s.seccion}>
@@ -165,11 +192,55 @@ export function InformePDF({ empresa, logo, codigo, cliente, descripcion, estado
               ? `Base: ${r.cif.nombreBase} · Cantidad de la base: ${formatearCantidad(r.cif.cantidadBase)} · Tasa: ${formatearCantidad(r.cif.tasa)} (${r.cif.unidadTasa}) · CIF asignado: ${formatearPesos(r.cif.valor)}`
               : "Sin CIF asignado"}
           </Text>
+          {r.cif?.detalle && (
+            <Tabla
+              cols={[{ t: "Actividad", w: 30 }, { t: "Inductor", w: 30 }, { t: "Cantidad", w: 14, num: true }, { t: "Tasa", w: 12, num: true }, { t: "CIF", w: 14, num: true }]}
+              filas={r.cif.detalle.map((x) => [x.nombre, x.inductor, formatearCantidad(x.cantidadBase), formatearCantidad(x.tasa), formatearPesos(x.valor)])}
+            />
+          )}
         </View>
 
-        {estimado && (
+        {ajuste && (
+          <View style={s.seccion} wrap={false}>
+            <Text style={s.subtitulo}>Costo ajustado (conciliación del CIF real del período {ajuste.periodo})</Text>
+            <Tabla
+              cols={[{ t: "Concepto", w: 60 }, { t: "Valor", w: 40, num: true }]}
+              filas={[
+                ["Costo acumulado (con CIF aplicado)", formatearPesos(ajuste.costoAcumulado)],
+                ["Ajuste por conciliación del CIF", formatearPesos(ajuste.ajuste)],
+                ["Costo ajustado", formatearPesos(ajuste.costoAjustado)],
+                ...(verMargen && ajuste.margenAjustado
+                  ? [["Margen ajustado", formatearPesos(ajuste.margenAjustado)], ["Margen ajustado %", formatearPorcentaje(ajuste.margenAjustadoPct)]]
+                  : []),
+              ]}
+            />
+            <Text style={[s.tenue, { marginTop: 3 }]}>
+              CIF real {formatearPesos(ajuste.cifReal)} - CIF aplicado {formatearPesos(ajuste.cifAplicadoPeriodo)} = {formatearPesos(ajuste.diferencia)}. Política: {NOMBRE_POLITICA[ajuste.politica]}.
+            </Text>
+          </View>
+        )}
+
+        {comparaciones.map(({ titulo, c, explicaciones }) => (
+          <View key={titulo} style={s.seccion} wrap={false}>
+            <Text style={s.subtitulo}>{titulo} vs costo acumulado</Text>
+            <Tabla
+              cols={[{ t: "Concepto", w: 34 }, { t: "Presupuesto", w: 18, num: true }, { t: "Acumulado", w: 18, num: true }, { t: "Diferencia", w: 18, num: true }, { t: "%", w: 12, num: true }]}
+              filas={[...c.filas, c.total].map((f) => [f.concepto, formatearPesos(f.presupuesto), formatearPesos(f.real), formatearPesos(f.diferencia), f.pct ? formatearPorcentaje(f.pct) : "—"])}
+            />
+            <Text style={[s.tenue, { marginTop: 3 }]}>
+              {c.horas.map((h) => `${h.concepto}: estimadas ${formatearCantidad(h.estimadas)}, registradas ${formatearCantidad(h.reales)}`).join(" · ")}
+            </Text>
+            {explicaciones.map((e) => (
+              <Text key={e.concepto} style={{ marginTop: 2 }}>
+                {e.concepto} - causa declarada: {e.causa}. {e.explicacion}
+              </Text>
+            ))}
+          </View>
+        ))}
+
+        {comparaciones.length === 0 && estimado && (
           <View style={s.seccion}>
-            <Text style={s.subtitulo}>Estimado al cotizar vs real</Text>
+            <Text style={s.subtitulo}>Estimación automática al cotizar vs real (sin presupuesto aprobado)</Text>
             <Tabla
               cols={[{ t: "Concepto", w: 40 }, { t: "Estimado", w: 20, num: true }, { t: "Real", w: 20, num: true }, { t: "Diferencia", w: 20, num: true }]}
               filas={CONCEPTOS.map((c) => [c.nombre, formatearPesos(estimado.elementos[c.clave]), formatearPesos(r.elementos[c.clave]), formatearPesos(d(r.elementos[c.clave]).minus(d(estimado.elementos[c.clave])))])}

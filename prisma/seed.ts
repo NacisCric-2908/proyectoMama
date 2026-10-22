@@ -97,6 +97,31 @@ async function demo() {
     idMaterial[codigo] = m.id;
   }
 
+  // Inventario inicial (kárdex) al 2 de enero de 2026, valorado al costo de referencia
+  if ((await prisma.movimientoInventario.count()) === 0) {
+    const iniciales: Record<string, string> = { "PLC-01": "5", "HMI-01": "5", "GAB-01": "5", "BRK-01": "100", "CAB-01": "1000", "BOR-01": "1000" };
+    for (const [codigo, , , , costo] of materiales) {
+      const cantidad = iniciales[codigo];
+      const valor = (Number(cantidad) * Number(costo)).toString();
+      await prisma.movimientoInventario.create({
+        data: {
+          materialId: idMaterial[codigo],
+          fecha: new Date("2026-01-02T00:00:00Z"),
+          tipo: "ENTRADA",
+          cantidad,
+          costoUnitario: costo,
+          costoTotal: valor,
+          saldoCantidad: cantidad,
+          saldoValor: valor,
+          costoPromedio: costo,
+          documento: "Inventario inicial",
+          autorizadoPorId: admin.id,
+          autorizadoPorNombre: admin.nombre,
+        },
+      });
+    }
+  }
+
   // CIF 2026: base Horas de MOD, tasa $30.000 por hora
   for (let mes = 1; mes <= 12; mes++) {
     const periodo = `2026-${String(mes).padStart(2, "0")}`;
@@ -107,7 +132,23 @@ async function demo() {
     });
   }
 
-  if (await prisma.ordenProyecto.findUnique({ where: { codigo: "OP-2026-0001" } })) return;
+  // CIF real de marzo de 2026 (para demostrar la conciliación: 1.000.000 real vs 900.000 aplicado)
+  if ((await prisma.conceptoCIFReal.count({ where: { periodo: "2026-03" } })) === 0) {
+    await prisma.conceptoCIFReal.createMany({
+      data: [
+        { periodo: "2026-03", concepto: "Arriendo de planta (proporción producción)", valor: "450000", soporte: "Contrato de arriendo" },
+        { periodo: "2026-03", concepto: "Energía eléctrica del taller", valor: "180000", soporte: "Factura de energía" },
+        { periodo: "2026-03", concepto: "Depreciación de herramientas", valor: "220000", soporte: "Cuadro de depreciación" },
+        { periodo: "2026-03", concepto: "Supervisión y consumibles", valor: "150000", soporte: "Comprobantes" },
+      ],
+    });
+  }
+
+  const existente = await prisma.ordenProyecto.findUnique({ where: { codigo: "OP-2026-0001" } });
+  if (existente) {
+    await presupuestoDemo(existente.id);
+    return;
+  }
 
   const adminActual: UsuarioActual = {
     id: admin.id,
@@ -188,6 +229,35 @@ async function demo() {
     },
     { timeout: 60_000 },
   );
+  const creada = await prisma.ordenProyecto.findUniqueOrThrow({ where: { codigo: "OP-2026-0001" } });
+  await presupuestoDemo(creada.id);
+}
+
+/** Presupuesto original aprobado de OP-2026-0001 (estimación previa a la ejecución). */
+async function presupuestoDemo(ordenId: string) {
+  if ((await prisma.presupuestoOrden.count({ where: { ordenId } })) > 0) return;
+  const contador = await prisma.usuario.findUnique({ where: { email: "contador@empresa.com" } });
+  const coordinador = await prisma.usuario.findUnique({ where: { email: "coordinador@empresa.com" } });
+  await prisma.presupuestoOrden.create({
+    data: {
+      ordenId,
+      version: 1,
+      materialesDirectos: "4560000",
+      manoObraDirecta: "980000",
+      ingenieriaAutomatizacion: "675000",
+      pruebasPuestaMarcha: "440000",
+      cif: "840000",
+      mermas: "0",
+      horasEnsamble: "28",
+      horasIngenieria: "26",
+      creadoPorId: coordinador?.id,
+      creadoPorNombre: coordinador?.nombre,
+      creadoEn: new Date("2026-03-02T15:00:00Z"),
+      aprobadoPorId: contador?.id,
+      aprobadoPorNombre: contador?.nombre,
+      aprobadoEn: new Date("2026-03-02T20:00:00Z"),
+    },
+  });
 }
 
 async function main() {

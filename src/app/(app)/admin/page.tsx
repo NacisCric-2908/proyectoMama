@@ -84,6 +84,12 @@ export default async function Admin() {
             <Campo etiqueta="Umbral de merma alta %">
               <Entrada name="umbralMermaPct" inputMode="decimal" defaultValue={p.umbralMermaPct.toString()} />
             </Campo>
+            <Campo etiqueta="Merma anormal" ayuda="Política de tratamiento contable">
+              <Selector name="excluirMermaAnormal" defaultValue={p.excluirMermaAnormal ? "true" : "false"}>
+                <option value="false">Se incluye en el costo de la orden</option>
+                <option value="true">Se reconoce como pérdida del período</option>
+              </Selector>
+            </Campo>
             <Campo etiqueta="Moneda">
               <Entrada value="COP" readOnly />
             </Campo>

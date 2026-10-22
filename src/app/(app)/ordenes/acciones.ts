@@ -18,6 +18,10 @@ import {
   guardarServicio,
 } from "@/lib/servicios/lineas";
 import { actualizarOrden, crearOrden } from "@/lib/servicios/ordenes";
+import { aprobarPresupuesto, crearVersionPresupuesto } from "@/lib/servicios/presupuestos";
+import { registrarDevolucion, registrarRequisicion } from "@/lib/servicios/inventario";
+import { guardarExplicacion } from "@/lib/servicios/desviaciones";
+import { formatearPesos } from "@/lib/costeo";
 
 const ruta = (id: string) => [`/ordenes/${id}`, "/ordenes", "/"];
 const tx = <T,>(fn: (t: Parameters<Parameters<typeof prisma.$transaction>[0]>[0]) => Promise<T>) =>
@@ -114,5 +118,45 @@ export async function accionAsignarCIF(id: string, _: ResultadoAccion | null, fd
       }),
     );
     return { mensaje: "CIF asignado" };
+  }, ruta(id));
+}
+
+export async function accionCrearPresupuesto(id: string, _: ResultadoAccion | null, fd: FormData) {
+  return ejecutar(async () => {
+    const u = await requerirPermiso("ordenes.editar");
+    const p = await tx((t) => crearVersionPresupuesto(t, u, id, datosDe(fd)));
+    return { mensaje: `Versión ${p.version} del presupuesto registrada. Debe aprobarse para usarla en la comparación` };
+  }, ruta(id));
+}
+
+export async function accionAprobarPresupuesto(id: string, _: ResultadoAccion | null, fd: FormData) {
+  return ejecutar(async () => {
+    const u = await requerirPermiso("presupuesto.aprobar");
+    const p = await tx((t) => aprobarPresupuesto(t, u, id, String(fd.get("presupuestoId"))));
+    return { mensaje: `Versión ${p.version} aprobada` };
+  }, ruta(id));
+}
+
+export async function accionRequisicion(id: string, _: ResultadoAccion | null, fd: FormData) {
+  return ejecutar(async () => {
+    const u = await requerirPermiso("inventario.gestionar");
+    const m = await tx((t) => registrarRequisicion(t, u, id, datosDe(fd)));
+    return { mensaje: `Requisición registrada: salida valorada a ${formatearPesos(m.costoUnitario.toString())} por unidad (promedio ponderado)` };
+  }, [...ruta(id), "/inventario"]);
+}
+
+export async function accionDevolucion(id: string, _: ResultadoAccion | null, fd: FormData) {
+  return ejecutar(async () => {
+    const u = await requerirPermiso("inventario.gestionar");
+    await tx((t) => registrarDevolucion(t, u, id, datosDe(fd)));
+    return { mensaje: "Devolución al almacén registrada" };
+  }, [...ruta(id), "/inventario"]);
+}
+
+export async function accionExplicarDesviacion(id: string, _: ResultadoAccion | null, fd: FormData) {
+  return ejecutar(async () => {
+    const u = await requerirPermiso("ordenes.editar", "ordenes.cerrar");
+    await tx((t) => guardarExplicacion(t, u, id, datosDe(fd)));
+    return { mensaje: "Explicación registrada" };
   }, ruta(id));
 }

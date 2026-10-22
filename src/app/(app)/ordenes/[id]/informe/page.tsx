@@ -8,6 +8,11 @@ import { aISO } from "@/lib/servicios/util";
 import { EnlaceBoton, InsigniaEstado, ListaAlertas, Tarjeta } from "@/components/ui";
 import { EstimadoVsReal, TablaCostos } from "@/components/orden/TablaCostos";
 import { GraficoParticipacion } from "@/components/orden/GraficoParticipacion";
+import { DetalleActividades } from "@/components/orden/TabCIF";
+import { ResumenMermas } from "@/components/orden/ResumenMermas";
+import { ComparacionPresupuesto } from "@/components/orden/ComparacionPresupuesto";
+import { CostoAjustado } from "@/components/orden/CostoAjustado";
+import { comparacionesDe } from "@/lib/servicios/presupuestos";
 
 export default async function Informe({ params }: { params: Promise<{ id: string }> }) {
   const u = await requerirSesion();
@@ -20,6 +25,7 @@ export default async function Informe({ params }: { params: Promise<{ id: string
   const snap = orden.snapshotCierre as unknown as SnapshotCierre | null;
   const estimado = orden.estimadoAlCotizar as unknown as ResumenSerializado | null;
   const p = await prisma.parametrosGenerales.findUnique({ where: { id: 1 } });
+  const comp = comparacionesDe(orden.presupuestos, r);
 
   return (
     <div className="flex flex-col gap-4">
@@ -71,12 +77,13 @@ export default async function Informe({ params }: { params: Promise<{ id: string
             <thead><tr><th>Código</th><th>Descripción</th><th>Und</th><th className="num">Requerida</th><th className="num">Entregada</th><th className="num">Utilizada</th><th className="num">Devuelta</th><th className="num">Merma</th><th className="num">Costo unit.</th><th className="num">Costo</th><th className="num">Costo merma</th></tr></thead>
             <tbody>
               {r.materiales.lineas.map((l, i) => (
-                <tr key={l.id ?? i}><td>{l.codigo}</td><td>{l.descripcion}</td><td>{l.unidad}</td><td className="num">{formatearCantidad(l.requerida)}</td><td className="num">{formatearCantidad(l.entregada)}</td><td className="num">{formatearCantidad(l.utilizada)}</td><td className="num">{formatearCantidad(l.devuelta)}</td><td className="num">{formatearCantidad(l.merma)}</td><td className="num">{formatearPesos(l.costoUnitario)}</td><td className="num">{formatearPesos(l.costoLinea)}</td><td className="num">{formatearPesos(l.costoMerma)}</td></tr>
+                <tr key={l.id ?? i}><td>{l.codigo}</td><td>{l.descripcion}</td><td>{l.unidad}</td><td className="num">{formatearCantidad(l.requerida)}</td><td className="num">{formatearCantidad(l.entregada)}</td><td className="num">{formatearCantidad(l.utilizada)}</td><td className="num">{formatearCantidad(l.devuelta)}</td><td className="num">{formatearCantidad(l.merma)}</td><td className="num">{formatearPesos(l.costoUnitario)}</td><td className="num">{formatearPesos(l.costoLinea)}</td><td className="num">{formatearPesos(l.costoMermaNeto)}</td></tr>
               ))}
             </tbody>
             <tfoot><tr><td colSpan={9}>Totales</td><td className="num">{formatearPesos(r.materiales.costoMaterialesDirectos)}</td><td className="num">{formatearPesos(r.materiales.costoMermas)}</td></tr></tfoot>
           </table>
         </div>
+        <ResumenMermas r={r} />
       </Tarjeta>
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -100,13 +107,40 @@ export default async function Informe({ params }: { params: Promise<{ id: string
           ) : (
             <p className="text-sm text-advertencia">Sin CIF asignado.</p>
           )}
+          {r.cif?.detalle && <DetalleActividades detalle={r.cif.detalle} />}
         </Tarjeta>
       </div>
 
-      {estimado && (
-        <Tarjeta titulo="Estimado al cotizar vs real">
-          <EstimadoVsReal estimado={estimado} real={r} />
+      {orden.ajustesCIF[0] && (
+        <Tarjeta titulo="Costo ajustado (conciliación del CIF real)">
+          <CostoAjustado ajuste={orden.ajustesCIF[0]} valorCotizado={orden.valorCotizado?.toString() ?? null} />
         </Tarjeta>
+      )}
+
+      {comp.vsOriginal ? (
+        <Tarjeta titulo="Presupuesto vs costo acumulado">
+          <div className="flex flex-col gap-4">
+            <ComparacionPresupuesto
+              c={comp.vsOriginal}
+              titulo={`Presupuesto original (v${comp.original!.version})`}
+              explicar={{ ordenId: orden.id, presupuestoId: comp.original!.id, explicaciones: orden.explicaciones, puede: false }}
+            />
+            {comp.vsVigente && (
+              <ComparacionPresupuesto
+                c={comp.vsVigente}
+                titulo={`Presupuesto vigente (v${comp.vigente!.version})`}
+                explicar={{ ordenId: orden.id, presupuestoId: comp.vigente!.id, explicaciones: orden.explicaciones, puede: false }}
+              />
+            )}
+          </div>
+        </Tarjeta>
+      ) : (
+        estimado && (
+          <Tarjeta titulo="Estimación automática al cotizar vs real">
+            <p className="mb-2 text-sm text-advertencia">La orden no tiene un presupuesto de costo aprobado.</p>
+            <EstimadoVsReal estimado={estimado} real={r} />
+          </Tarjeta>
+        )
       )}
 
       {snap && (

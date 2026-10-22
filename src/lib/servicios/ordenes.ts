@@ -11,6 +11,7 @@ import {
   type EtapaInfo,
   type ResumenCostos,
   type Serializado,
+  type TasaActividad,
 } from "@/lib/costeo";
 import { exigir, ErrorPermiso, tiene, type UsuarioActual } from "@/lib/auth/permisos";
 import { auditar } from "./auditoria";
@@ -31,7 +32,11 @@ const vivos = { eliminadoEn: null };
 export const incluirOrden = {
   cliente: true,
   responsable: { select: { id: true, nombre: true } },
-  materiales: { where: vivos, include: { material: true, etapa: true }, orderBy: { creadoEn: "asc" } },
+  materiales: {
+    where: vivos,
+    include: { material: true, etapa: true, _count: { select: { movimientos: true } } },
+    orderBy: { creadoEn: "asc" },
+  },
   registrosMOD: { where: vivos, include: { trabajador: true }, orderBy: [{ fecha: "asc" }, { creadoEn: "asc" }] },
   registrosIng: {
     where: vivos,
@@ -42,6 +47,9 @@ export const incluirOrden = {
   asignacionCIF: true,
   historial: { orderBy: { fecha: "desc" } },
   tecnicos: true,
+  presupuestos: { orderBy: { version: "asc" } },
+  explicaciones: true,
+  ajustesCIF: { where: { conciliacion: { anuladaEn: null } }, include: { conciliacion: true } },
 } satisfies Prisma.OrdenProyectoInclude;
 
 export type OrdenCompleta = Prisma.OrdenProyectoGetPayload<{ include: typeof incluirOrden }>;
@@ -64,10 +72,19 @@ export async function parametros(tx: Tx) {
 }
 
 /** Convierte una orden de la BD en la entrada del motor de cálculo. */
+export interface PoliticasCosteo {
+  umbralMermaPct: string;
+  excluirMermaAnormal: boolean;
+}
+
+export function politicasDe(p: { umbralMermaPct: { toString(): string }; excluirMermaAnormal: boolean }): PoliticasCosteo {
+  return { umbralMermaPct: p.umbralMermaPct.toString(), excluirMermaAnormal: p.excluirMermaAnormal };
+}
+
 export function entradaMotor(
   o: OrdenCompleta,
   etapas: EtapaInfo[],
-  umbralMermaPct: string,
+  { umbralMermaPct, excluirMermaAnormal }: PoliticasCosteo,
   hoy: string = hoyBogota(),
 ): EntradaOrden {
   return {
@@ -79,6 +96,7 @@ export function entradaMotor(
     fechaEstimadaEntrega: aISO(o.fechaEstimadaEntrega),
     hoy,
     umbralMermaPct,
+    excluirMermaAnormal,
     etapas,
     materiales: o.materiales.map((m) => ({
       id: m.id,
@@ -91,6 +109,8 @@ export function entradaMotor(
       utilizada: m.cantidadUtilizada.toString(),
       devuelta: m.cantidadDevuelta.toString(),
       costoUnitario: m.costoUnitarioAplicado.toString(),
+      clasificacionMerma: m.clasificacionMerma,
+      valorRecuperado: m.valorRecuperado.toString(),
     })),
     mod: o.registrosMOD.map((r) => ({
       id: r.id,
@@ -115,13 +135,19 @@ export function entradaMotor(
       descripcion: s.descripcion,
       valor: s.valor.toString(),
     })),
-    cif: o.asignacionCIF ? { base: o.asignacionCIF.base, tasa: o.asignacionCIF.tasaAplicada.toString() } : null,
+    cif: o.asignacionCIF
+      ? {
+          base: o.asignacionCIF.base,
+          tasa: o.asignacionCIF.tasaAplicada.toString(),
+          tasasActividad: (o.asignacionCIF.tasasActividad as unknown as TasaActividad[] | null) ?? [],
+        }
+      : null,
   };
 }
 
 export async function calcularResumenVivo(tx: Tx, o: OrdenCompleta): Promise<ResumenCostos> {
   const [etapas, p] = await Promise.all([etapasCatalogo(tx), parametros(tx)]);
-  return calcularResumen(entradaMotor(o, etapas, p.umbralMermaPct.toString()));
+  return calcularResumen(entradaMotor(o, etapas, politicasDe(p)));
 }
 
 /**
@@ -353,7 +379,7 @@ export async function listarOrdenes(tx: Tx, u: UsuarioActual, f: FiltrosOrdenes 
       resumen =
         estaCerrada(o.estado as EstadoOrden) && o.snapshotCierre
           ? (o.snapshotCierre as unknown as SnapshotCierre).resumen
-          : serializar(calcularResumen(entradaMotor(o, etapas, p.umbralMermaPct.toString(), hoy)));
+          : serializar(calcularResumen(entradaMotor(o, etapas, politicasDe(p), hoy)));
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }

@@ -1,6 +1,16 @@
 import { CIEN, CERO, Decimal, d, pesos, sumar, type Num } from "./decimal";
 import { ErrorCosteo, MENSAJES } from "./errores";
 
+/** Clasificación de la merma según la política de la empresa (D16 del artículo). */
+export type ClasificacionMerma = "NORMAL" | "ANORMAL" | "RECUPERABLE";
+
+export const NOMBRE_CLASIFICACION_MERMA: Record<ClasificacionMerma | "SIN_CLASIFICAR", string> = {
+  NORMAL: "Normal (inherente al proceso)",
+  ANORMAL: "Anormal (evitable)",
+  RECUPERABLE: "Recuperable",
+  SIN_CLASIFICAR: "Sin clasificar",
+};
+
 export interface LineaMaterialEntrada {
   id?: string;
   codigo?: string;
@@ -13,6 +23,9 @@ export interface LineaMaterialEntrada {
   utilizada?: Num | null;
   devuelta?: Num | null;
   costoUnitario: Num;
+  clasificacionMerma?: ClasificacionMerma | null;
+  /** Valor recuperado de una merma recuperable (venta de chatarra, reutilización…). */
+  valorRecuperado?: Num | null;
 }
 
 export interface LineaMaterialResultado {
@@ -31,7 +44,12 @@ export interface LineaMaterialResultado {
   /** merma ÷ entregada × 100 (0 si no hay entregada). */
   mermaPct: Decimal;
   costoLinea: Decimal;
+  /** Merma × costo unitario (bruto). */
   costoMerma: Decimal;
+  clasificacionMerma: ClasificacionMerma | null;
+  valorRecuperado: Decimal;
+  /** Costo de la merma menos el valor recuperado. Es el que se suma al costo. */
+  costoMermaNeto: Decimal;
   costoEstimado: Decimal;
   /** (utilizada + merma) − requerida. Positiva = sobreconsumo; negativa = ahorro. */
   diferenciaCantidad: Decimal;
@@ -42,8 +60,13 @@ export interface ResultadoMateriales {
   lineas: LineaMaterialResultado[];
   /** Σ utilizada × costo unitario (pesos). */
   costoMaterialesDirectos: Decimal;
-  /** Σ merma × costo unitario (pesos). No se suma dentro de materiales directos. */
+  /** Σ costo neto de mermas incluidas en el costo (pesos). No se suma dentro de materiales directos. */
   costoMermas: Decimal;
+  /** Costo neto de mermas por clasificación (pesos). */
+  mermasPorClase: Record<ClasificacionMerma | "SIN_CLASIFICAR", Decimal>;
+  valorRecuperadoTotal: Decimal;
+  /** Merma anormal llevada a pérdida del período en lugar del costo de la orden (si la política lo indica). */
+  mermaAnormalExcluida: Decimal;
   /** Σ requerida × costo unitario (pesos). */
   costoEstimado: Decimal;
   diferenciaValorTotal: Decimal;
@@ -71,6 +94,14 @@ export function calcularLineaMaterial(linea: LineaMaterialEntrada): LineaMateria
   const merma = entregada.minus(utilizada).minus(devuelta);
   if (merma.isNegative()) throw new ErrorCosteo(MENSAJES.mermaNegativa, "MERMA_NEGATIVA");
 
+  const costoMerma = merma.times(costoUnitario);
+  const valorRecuperado = d(linea.valorRecuperado);
+  noNegativo(valorRecuperado, "el valor recuperado");
+  if (valorRecuperado.greaterThan(0) && linea.clasificacionMerma !== "RECUPERABLE")
+    throw new ErrorCosteo("Solo una merma clasificada como recuperable puede tener valor recuperado", "RECUPERADO_SIN_CLASE");
+  if (valorRecuperado.greaterThan(costoMerma))
+    throw new ErrorCosteo("El valor recuperado no puede superar el costo de la merma", "RECUPERADO_EXCESIVO");
+
   const diferenciaCantidad = utilizada.plus(merma).minus(requerida);
 
   return {
@@ -88,19 +119,28 @@ export function calcularLineaMaterial(linea: LineaMaterialEntrada): LineaMateria
     merma,
     mermaPct: entregada.isZero() ? CERO : merma.div(entregada).times(CIEN),
     costoLinea: utilizada.times(costoUnitario),
-    costoMerma: merma.times(costoUnitario),
+    costoMerma,
+    clasificacionMerma: linea.clasificacionMerma ?? null,
+    valorRecuperado,
+    costoMermaNeto: costoMerma.minus(valorRecuperado),
     costoEstimado: requerida.times(costoUnitario),
     diferenciaCantidad,
     diferenciaValor: diferenciaCantidad.times(costoUnitario),
   };
 }
 
-export function calcularMateriales(lineas: LineaMaterialEntrada[]): ResultadoMateriales {
+export function calcularMateriales(lineas: LineaMaterialEntrada[], opciones: { excluirMermaAnormal?: boolean } = {}): ResultadoMateriales {
   const resultado = lineas.map(calcularLineaMaterial);
+  const clase = (c: ClasificacionMerma | "SIN_CLASIFICAR") =>
+    pesos(sumar(resultado.filter((l) => (l.clasificacionMerma ?? "SIN_CLASIFICAR") === c).map((l) => l.costoMermaNeto)));
+  const excluida = (l: LineaMaterialResultado) => !!opciones.excluirMermaAnormal && l.clasificacionMerma === "ANORMAL";
   return {
     lineas: resultado,
     costoMaterialesDirectos: pesos(sumar(resultado.map((l) => l.costoLinea))),
-    costoMermas: pesos(sumar(resultado.map((l) => l.costoMerma))),
+    costoMermas: pesos(sumar(resultado.filter((l) => !excluida(l)).map((l) => l.costoMermaNeto))),
+    mermasPorClase: { NORMAL: clase("NORMAL"), ANORMAL: clase("ANORMAL"), RECUPERABLE: clase("RECUPERABLE"), SIN_CLASIFICAR: clase("SIN_CLASIFICAR") },
+    valorRecuperadoTotal: pesos(sumar(resultado.map((l) => l.valorRecuperado))),
+    mermaAnormalExcluida: pesos(sumar(resultado.filter(excluida).map((l) => l.costoMermaNeto))),
     costoEstimado: pesos(sumar(resultado.map((l) => l.costoEstimado))),
     diferenciaValorTotal: pesos(sumar(resultado.map((l) => l.diferenciaValor))),
     hayCantidadUtilizada: resultado.some((l) => l.utilizada.greaterThan(0)),
